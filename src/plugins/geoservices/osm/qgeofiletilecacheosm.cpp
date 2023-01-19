@@ -42,8 +42,12 @@
 #include <QDateTime>
 #include <QtConcurrent>
 #include <QThread>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 
 QT_BEGIN_NAMESPACE
+
+#define CHARTS QStringList({"southeast_england.db", "southwest_england.db", "ireland_south.db", "wales.db", "ireland_north.db", "northwest_england_southern_scotland.db", "eastern_england.db", "northwest_scotland.db", "northeast_scotland.db"})
 
 QGeoFileTileCacheOsm::QGeoFileTileCacheOsm(const QVector<QGeoTileProviderOsm *> &providers,
                                            const QString &offlineDirectory,
@@ -63,10 +67,19 @@ QGeoFileTileCacheOsm::QGeoFileTileCacheOsm(const QVector<QGeoTileProviderOsm *> 
         connect(providers[i], &QGeoTileProviderOsm::resolutionFinished, this, &QGeoFileTileCacheOsm::onProviderResolutionFinished);
         connect(providers[i], &QGeoTileProviderOsm::resolutionError, this, &QGeoFileTileCacheOsm::onProviderResolutionFinished);
     }
+    for(QString name : CHARTS) {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+        db.setDatabaseName(name);
+        db.open();
+        QSqlQuery query = QSqlQuery(db);
+        query.exec("CREATE TABLE IF NOT EXISTS tiles (name VARCHAR(255), data BLOB)");
+    }
 }
 
 QGeoFileTileCacheOsm::~QGeoFileTileCacheOsm()
 {
+    QSqlDatabase db = QSqlDatabase::database("ChartDB");
+    db.close();
 }
 
 QSharedPointer<QGeoTileTexture> QGeoFileTileCacheOsm::get(const QGeoTileSpec &spec)
@@ -153,16 +166,30 @@ QSharedPointer<QGeoTileTexture> QGeoFileTileCacheOsm::getFromOfflineStorage(cons
     if (providerId < 0 || providerId >= m_providers.size())
         return QSharedPointer<QGeoTileTexture>();
 
-    const QString fileName = tileSpecToFilename(spec, QStringLiteral("*"), providerId);
-    QStringList validTiles = m_offlineDirectory.entryList({fileName});
-    if (!validTiles.size())
-        return QSharedPointer<QGeoTileTexture>();
+    QByteArray bytes;
+    const QString fileName = tileSpecToFilename(spec, QStringLiteral("png"), providerId);
+    // Fetch from database if available
+    bool found = false;
+    for (QString chart : CHARTS) {
+        QSqlQuery query = QSqlQuery(QSqlDatabase::database(chart));
+        query.prepare( "SELECT data from tiles WHERE name=:name");
+        query.bindValue(":name", fileName);
+        query.exec();
+        if (query.next()) {
+            bytes = query.value(0).toByteArray();
+            found = true;
+            break;
+        }
+    }
 
-    QFile file(m_offlineDirectory.absoluteFilePath(validTiles.first()));
-    if (!file.open(QIODevice::ReadOnly))
-        return QSharedPointer<QGeoTileTexture>();
-    QByteArray bytes = file.readAll();
-    file.close();
+    if (!found) {
+        // Otherwise fall back to files
+        QFile file(m_offlineDirectory.absoluteFilePath(fileName));
+        if (!file.open(QIODevice::ReadOnly))
+            return QSharedPointer<QGeoTileTexture>();
+        bytes = file.readAll();
+        file.close();
+    }
 
     QImage image;
     if (!image.loadFromData(bytes)) {

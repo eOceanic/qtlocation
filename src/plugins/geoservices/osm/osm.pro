@@ -1,6 +1,6 @@
 TARGET = qtgeoservices_osm
 
-QT += location-private positioning-private network concurrent
+QT += location-private positioning-private network concurrent sql
 
 QT_FOR_CONFIG += location-private
 qtConfig(location-labs-plugin): DEFINES += LOCATIONLABS
